@@ -1,5 +1,6 @@
 services:
   api:
+    image: ghcr.io/mars1836/codelife-academy-be:latest
     build: .
     env_file: .env
     ports:

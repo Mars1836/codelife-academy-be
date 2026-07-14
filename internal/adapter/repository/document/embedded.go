@@ -10,13 +10,56 @@ import (
 
 	domain "codelife-study-be/internal/domain/document"
 	assets "codelife-study-be/src"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type EmbeddedRepository struct{}
+type EmbeddedRepository struct {
+	db *pgxpool.Pool
+}
 
-func NewEmbeddedRepository() *EmbeddedRepository { return &EmbeddedRepository{} }
+func NewEmbeddedRepository(db ...*pgxpool.Pool) *EmbeddedRepository {
+	repository := &EmbeddedRepository{}
+	if len(db) > 0 {
+		repository.db = db[0]
+	}
+	return repository
+}
 
-func (r *EmbeddedRepository) List(context.Context) ([]domain.Document, error) {
+func (r *EmbeddedRepository) List(ctx context.Context) ([]domain.Document, error) {
+	if r.db != nil {
+		return r.listFromDatabase(ctx)
+	}
+	return r.listFromEmbedded()
+}
+
+func (r *EmbeddedRepository) SyncMetadata(ctx context.Context) error {
+	if r.db == nil {
+		return nil
+	}
+	documents, err := r.listFromEmbedded()
+	if err != nil {
+		return err
+	}
+	for _, document := range documents {
+		if _, err := r.db.Exec(ctx, `
+			INSERT INTO documents (slug, title, category, word_count, reading_time, updated_at)
+			VALUES ($1, $2, $3, $4, $5, NOW())
+			ON CONFLICT (slug) DO UPDATE SET
+				title = EXCLUDED.title,
+				category = EXCLUDED.category,
+				word_count = EXCLUDED.word_count,
+				reading_time = EXCLUDED.reading_time,
+				updated_at = NOW()
+		`, document.Slug, document.Title, document.Category, document.WordCount, document.ReadingTime); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *EmbeddedRepository) listFromEmbedded() ([]domain.Document, error) {
 	entries, err := fs.ReadDir(assets.Documents, "documents")
 	if err != nil {
 		return nil, err
@@ -39,6 +82,30 @@ func (r *EmbeddedRepository) List(context.Context) ([]domain.Document, error) {
 		})
 	}
 	sort.Slice(documents, func(i, j int) bool { return documents[i].Title < documents[j].Title })
+	return documents, nil
+}
+
+func (r *EmbeddedRepository) listFromDatabase(ctx context.Context) ([]domain.Document, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT slug, title, category, word_count, reading_time
+		FROM documents
+		ORDER BY title ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	documents, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Document, error) {
+		var document domain.Document
+		err := row.Scan(&document.Slug, &document.Title, &document.Category, &document.WordCount, &document.ReadingTime)
+		return document, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(documents) == 0 {
+		return r.listFromEmbedded()
+	}
 	return documents, nil
 }
 

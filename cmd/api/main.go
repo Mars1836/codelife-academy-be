@@ -51,7 +51,11 @@ func main() {
 		postgresPinger = postgres
 	}
 
-	repository := documentrepo.NewEmbeddedRepository()
+	repository := documentrepo.NewEmbeddedRepository(postgres)
+	if err := repository.SyncMetadata(ctx); err != nil {
+		logger.Error("document metadata sync failed", "error", err)
+		os.Exit(1)
+	}
 	documents := documentusecase.New(repository, documentCache)
 	var authService *authusecase.Service
 	if postgres != nil {

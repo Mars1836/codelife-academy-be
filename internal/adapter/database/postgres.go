@@ -61,7 +61,17 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		`CREATE INDEX IF NOT EXISTS idx_auth_email_otps_lookup
 			ON auth_email_otps (email, otp_hash, expires_at)
 			WHERE consumed_at IS NULL`,
+		`CREATE TABLE IF NOT EXISTS documents (
+			slug TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			category TEXT NOT NULL,
+			word_count INTEGER NOT NULL,
+			reading_time INTEGER NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
 		`INSERT INTO schema_migrations (version) VALUES (2)
+			ON CONFLICT (version) DO NOTHING`,
+		`INSERT INTO schema_migrations (version) VALUES (3)
 			ON CONFLICT (version) DO NOTHING`,
 	}
 	for _, statement := range statements {
