@@ -79,7 +79,7 @@ curl -X POST http://localhost:8080/api/v1/auth/login \
   -d '{"email":"user@example.com","password":"password123"}'
 ```
 
-Nếu chưa cấu hình SMTP, backend sẽ log OTP ra stdout để test local. Khi deploy thật, cấu hình `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` và đổi `AUTH_TOKEN_SECRET` thành chuỗi random dài.
+Backend yêu cầu cấu hình mail khi bật module đăng ký và không ghi OTP vào log. Sử dụng `MAIL_HOST`, `MAIL_PORT`, `MAIL_USER`, `MAIL_PASS`, `MAIL_FROM`, `MAIL_SECURE` và đổi `AUTH_TOKEN_SECRET` thành chuỗi random dài. Với port 587 đặt `MAIL_SECURE=false`; port 465 dùng `MAIL_SECURE=true`.
 
 ## Chạy Local
 

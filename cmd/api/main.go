@@ -63,7 +63,11 @@ func main() {
 	var progressService *progressusecase.Service
 	if postgres != nil {
 		authRepository := authrepo.NewPostgresRepository(postgres)
-		mailer := email.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPFrom, logger)
+		mailer, err := email.NewSMTPMailer(cfg.MailHost, cfg.MailPort, cfg.MailUser, cfg.MailPass, cfg.MailFrom, cfg.MailSecure)
+		if err != nil {
+			logger.Error("mail configuration failed", "error", err)
+			os.Exit(1)
+		}
 		authService = authusecase.New(authRepository, mailer, cfg.AuthTokenSecret, cfg.AuthOTPTTL, cfg.AuthTokenTTL)
 		progressService = progressusecase.New(progressrepo.NewPostgresRepository(postgres))
 	}
