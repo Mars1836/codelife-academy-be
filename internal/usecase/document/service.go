@@ -17,7 +17,7 @@ func New(repository domain.Repository, cache domain.Cache) *Service {
 }
 
 func (s *Service) List(ctx context.Context) ([]domain.Document, error) {
-	const key = "documents:list:v2"
+	const key = "documents:list:v3"
 	var documents []domain.Document
 	if s.cache != nil && s.cache.Get(ctx, key, &documents) {
 		return documents, nil
@@ -34,7 +34,7 @@ func (s *Service) Get(ctx context.Context, slug string) (domain.Document, error)
 	if slug == "" || strings.ContainsAny(slug, `/\\`) {
 		return domain.Document{}, domain.ErrNotFound
 	}
-	key := "documents:item:v2:" + slug
+	key := "documents:item:v3:" + slug
 	var doc domain.Document
 	if s.cache != nil && s.cache.Get(ctx, key, &doc) {
 		return doc, nil
