@@ -76,6 +76,9 @@ func (s *Server) listDocuments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getDocument(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.authenticatedUser(w, r); !ok {
+		return
+	}
 	document, err := s.documents.Get(r.Context(), r.PathValue("slug"))
 	if errors.Is(err, domain.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "document not found")
