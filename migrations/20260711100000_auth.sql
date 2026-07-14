@@ -20,6 +20,3 @@ CREATE TABLE IF NOT EXISTS auth_email_otps (
 CREATE INDEX IF NOT EXISTS idx_auth_email_otps_lookup
 ON auth_email_otps (email, otp_hash, expires_at)
 WHERE consumed_at IS NULL;
-
-INSERT INTO schema_migrations (version) VALUES (2)
-ON CONFLICT (version) DO NOTHING;

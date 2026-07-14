@@ -2,7 +2,6 @@ package progress
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 
 	domain "codelife-study-be/internal/domain/progress"
@@ -32,7 +31,9 @@ func (r *PostgresRepository) ListByUser(ctx context.Context, userID string) ([]d
 	}
 	defer rows.Close()
 
-	return pgx.CollectRows(rows, scanProgress)
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.LearningProgress, error) {
+		return scanProgress(row)
+	})
 }
 
 func (r *PostgresRepository) FindByUserAndDocument(ctx context.Context, userID, documentSlug string) (domain.LearningProgress, error) {
@@ -48,10 +49,6 @@ func (r *PostgresRepository) FindByUserAndDocument(ctx context.Context, userID, 
 }
 
 func (r *PostgresRepository) Upsert(ctx context.Context, userID string, progress domain.LearningProgress) (domain.LearningProgress, error) {
-	checked, err := json.Marshal(progress.CheckedFlashcards)
-	if err != nil {
-		return domain.LearningProgress{}, err
-	}
 	result, err := scanProgress(r.db.QueryRow(ctx, `
 		INSERT INTO user_document_progress (
 			user_id, document_slug, status, scroll_position, note, checked_flashcards, updated_at
@@ -64,7 +61,7 @@ func (r *PostgresRepository) Upsert(ctx context.Context, userID string, progress
 			checked_flashcards = EXCLUDED.checked_flashcards,
 			updated_at = NOW()
 		RETURNING document_slug, status, scroll_position, note, checked_flashcards, updated_at
-	`, userID, progress.DocumentSlug, progress.Status, progress.ScrollPosition, progress.Note, checked))
+	`, userID, progress.DocumentSlug, progress.Status, progress.ScrollPosition, progress.Note, progress.CheckedFlashcards))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 		return domain.LearningProgress{}, domain.ErrDocumentNotFound
@@ -72,20 +69,20 @@ func (r *PostgresRepository) Upsert(ctx context.Context, userID string, progress
 	return result, err
 }
 
-func scanProgress(row pgx.CollectableRow) (domain.LearningProgress, error) {
+type rowScanner interface {
+	Scan(...any) error
+}
+
+func scanProgress(row rowScanner) (domain.LearningProgress, error) {
 	var progress domain.LearningProgress
-	var checked []byte
 	if err := row.Scan(
 		&progress.DocumentSlug,
 		&progress.Status,
 		&progress.ScrollPosition,
 		&progress.Note,
-		&checked,
+		&progress.CheckedFlashcards,
 		&progress.UpdatedAt,
 	); err != nil {
-		return domain.LearningProgress{}, err
-	}
-	if err := json.Unmarshal(checked, &progress.CheckedFlashcards); err != nil {
 		return domain.LearningProgress{}, err
 	}
 	if progress.CheckedFlashcards == nil {

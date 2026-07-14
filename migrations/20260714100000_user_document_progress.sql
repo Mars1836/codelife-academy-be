@@ -12,6 +12,3 @@ CREATE TABLE IF NOT EXISTS user_document_progress (
 
 CREATE INDEX IF NOT EXISTS idx_user_document_progress_updated
     ON user_document_progress (user_id, updated_at DESC);
-
-INSERT INTO schema_migrations (version) VALUES (4)
-ON CONFLICT (version) DO NOTHING;

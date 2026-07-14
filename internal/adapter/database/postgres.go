@@ -2,10 +2,29 @@ package database
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io/fs"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
+	migrationfiles "codelife-study-be/migrations"
+
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const migrationLockID int64 = 13820260714
+
+type migration struct {
+	version  int64
+	name     string
+	sql      string
+	checksum string
+}
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	if databaseURL == "" {
@@ -36,63 +55,104 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if pool == nil {
 		return nil
 	}
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS schema_migrations (
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version BIGINT PRIMARY KEY,
+			name TEXT,
+			checksum TEXT,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS auth_users (
-			id TEXT PRIMARY KEY,
-			email TEXT NOT NULL UNIQUE,
-			password_hash TEXT NOT NULL,
-			email_verified BOOLEAN NOT NULL DEFAULT FALSE,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS auth_email_otps (
-			id BIGSERIAL PRIMARY KEY,
-			user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
-			email TEXT NOT NULL,
-			otp_hash TEXT NOT NULL,
-			expires_at TIMESTAMPTZ NOT NULL,
-			consumed_at TIMESTAMPTZ,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_auth_email_otps_lookup
-			ON auth_email_otps (email, otp_hash, expires_at)
-			WHERE consumed_at IS NULL`,
-		`CREATE TABLE IF NOT EXISTS documents (
-			slug TEXT PRIMARY KEY,
-			title TEXT NOT NULL,
-			category TEXT NOT NULL,
-			word_count INTEGER NOT NULL,
-			reading_time INTEGER NOT NULL,
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS user_document_progress (
-			user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
-			document_slug TEXT NOT NULL REFERENCES documents(slug) ON DELETE CASCADE,
-			status TEXT NOT NULL DEFAULT 'unread'
-				CHECK (status IN ('unread', 'studying', 'completed')),
-			scroll_position INTEGER NOT NULL DEFAULT 0 CHECK (scroll_position >= 0),
-			note TEXT NOT NULL DEFAULT '',
-			checked_flashcards JSONB NOT NULL DEFAULT '{}'::jsonb,
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			PRIMARY KEY (user_id, document_slug)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_user_document_progress_updated
-			ON user_document_progress (user_id, updated_at DESC)`,
-		`INSERT INTO schema_migrations (version) VALUES (2)
-			ON CONFLICT (version) DO NOTHING`,
-		`INSERT INTO schema_migrations (version) VALUES (3)
-			ON CONFLICT (version) DO NOTHING`,
-		`INSERT INTO schema_migrations (version) VALUES (4)
-			ON CONFLICT (version) DO NOTHING`,
+		)
+	`); err != nil {
+		return fmt.Errorf("bootstrap schema migrations: %w", err)
 	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
+	if _, err := pool.Exec(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS name TEXT`); err != nil {
+		return fmt.Errorf("upgrade schema migrations table: %w", err)
+	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT`); err != nil {
+		return fmt.Errorf("upgrade schema migrations checksum: %w", err)
+	}
+
+	migrations, err := loadMigrations(migrationfiles.Files)
+	if err != nil {
+		return err
+	}
+	for _, item := range migrations {
+		if err := applyMigration(ctx, pool, item); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func loadMigrations(files fs.FS) ([]migration, error) {
+	entries, err := fs.ReadDir(files, ".")
+	if err != nil {
+		return nil, fmt.Errorf("read embedded migrations: %w", err)
+	}
+	items := make([]migration, 0, len(entries))
+	seen := make(map[int64]string)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		prefix, _, ok := strings.Cut(entry.Name(), "_")
+		if !ok {
+			return nil, fmt.Errorf("migration %q must start with a numeric timestamp and underscore", entry.Name())
+		}
+		version, err := strconv.ParseInt(prefix, 10, 64)
+		if err != nil || len(prefix) != 14 {
+			return nil, fmt.Errorf("migration %q must use YYYYMMDDHHMMSS_name.sql", entry.Name())
+		}
+		if _, err := time.Parse("20060102150405", prefix); err != nil {
+			return nil, fmt.Errorf("migration %q contains an invalid timestamp", entry.Name())
+		}
+		if previous, exists := seen[version]; exists {
+			return nil, fmt.Errorf("migrations %q and %q have the same timestamp", previous, entry.Name())
+		}
+		raw, err := fs.ReadFile(files, entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("read migration %q: %w", entry.Name(), err)
+		}
+		if strings.TrimSpace(string(raw)) == "" {
+			return nil, fmt.Errorf("migration %q is empty", entry.Name())
+		}
+		seen[version] = entry.Name()
+		checksum := fmt.Sprintf("%x", sha256.Sum256(raw))
+		items = append(items, migration{version: version, name: entry.Name(), sql: string(raw), checksum: checksum})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].version < items[j].version })
+	return items, nil
+}
+
+func applyMigration(ctx context.Context, pool *pgxpool.Pool, item migration) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin migration %s: %w", item.name, err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationLockID); err != nil {
+		return fmt.Errorf("lock migration %s: %w", item.name, err)
+	}
+	var storedChecksum *string
+	err = tx.QueryRow(ctx, `SELECT checksum FROM schema_migrations WHERE version = $1`, item.version).Scan(&storedChecksum)
+	if err == nil {
+		if storedChecksum != nil && *storedChecksum != item.checksum {
+			return fmt.Errorf("migration %s was modified after being applied", item.name)
+		}
+		return tx.Commit(ctx)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("check migration %s: %w", item.name, err)
+	}
+	if _, err := tx.Exec(ctx, item.sql); err != nil {
+		return fmt.Errorf("apply migration %s: %w", item.name, err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)`, item.version, item.name, item.checksum); err != nil {
+		return fmt.Errorf("record migration %s: %w", item.name, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit migration %s: %w", item.name, err)
 	}
 	return nil
 }

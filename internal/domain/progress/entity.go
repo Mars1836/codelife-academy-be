@@ -12,10 +12,10 @@ var (
 )
 
 type LearningProgress struct {
-	DocumentSlug     string          `json:"documentSlug"`
-	Status           string          `json:"status"`
-	ScrollPosition   int             `json:"scrollPosition"`
-	Note             string          `json:"note"`
+	DocumentSlug      string          `json:"documentSlug"`
+	Status            string          `json:"status"`
+	ScrollPosition    int             `json:"scrollPosition"`
+	Note              string          `json:"note"`
 	CheckedFlashcards map[string]bool `json:"checkedFlashcards"`
-	UpdatedAt        time.Time       `json:"updatedAt"`
+	UpdatedAt         time.Time       `json:"updatedAt"`
 }

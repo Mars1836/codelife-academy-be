@@ -31,6 +31,20 @@ PostgreSQL được giữ pool tối đa 5 connection. Redis dùng cache-aside v
 - `POST /api/v1/auth/verify-email`
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
+- `GET /api/v1/progress` (Bearer token required)
+- `PUT /api/v1/progress/{documentSlug}` (Bearer token required)
+
+Learning progress is stored per authenticated user in PostgreSQL. Supported fields are `status`, `scrollPosition`, `note`, and `checkedFlashcards`. The API derives the user ID from the signed token and never accepts a user ID from the request body.
+
+## Database migrations
+
+Migrations are embedded in the Go binary and run automatically at startup. To change the database schema, add exactly one new file under `migrations` using this format:
+
+```text
+YYYYMMDDHHMMSS_short_description.sql
+```
+
+Example: `20260714153000_add_user_preferences.sql`. Do not copy SQL into `postgres.go`; the runner applies pending files in timestamp order inside transactions and records their names and checksums in `schema_migrations`. Never edit a migration after it has been deployed—add a new migration instead.
 
 Response tài liệu có dạng:
 

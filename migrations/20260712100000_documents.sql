@@ -6,6 +6,3 @@ CREATE TABLE IF NOT EXISTS documents (
     reading_time  INTEGER NOT NULL,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-INSERT INTO schema_migrations (version) VALUES (3)
-ON CONFLICT (version) DO NOTHING;
