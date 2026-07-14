@@ -12,8 +12,10 @@ import (
 
 	authdomain "codelife-study-be/internal/domain/auth"
 	domain "codelife-study-be/internal/domain/document"
+	progressdomain "codelife-study-be/internal/domain/progress"
 	authusecase "codelife-study-be/internal/usecase/auth"
 	usecase "codelife-study-be/internal/usecase/document"
+	progressusecase "codelife-study-be/internal/usecase/progress"
 )
 
 type Pinger interface{ Ping(context.Context) error }
@@ -21,16 +23,17 @@ type Pinger interface{ Ping(context.Context) error }
 type Server struct {
 	documents       *usecase.Service
 	auth            *authusecase.Service
+	progress        *progressusecase.Service
 	postgres, redis Pinger
 	logger          *slog.Logger
 	maxBodyBytes    int64
 }
 
-func New(documents *usecase.Service, auth *authusecase.Service, postgres, redis Pinger, logger *slog.Logger, maxBodyBytes int64) http.Handler {
+func New(documents *usecase.Service, auth *authusecase.Service, progress *progressusecase.Service, postgres, redis Pinger, logger *slog.Logger, maxBodyBytes int64) http.Handler {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = 1 << 20
 	}
-	s := &Server{documents: documents, auth: auth, postgres: postgres, redis: redis, logger: logger, maxBodyBytes: maxBodyBytes}
+	s := &Server{documents: documents, auth: auth, progress: progress, postgres: postgres, redis: redis, logger: logger, maxBodyBytes: maxBodyBytes}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /readyz", s.ready)
@@ -40,6 +43,8 @@ func New(documents *usecase.Service, auth *authusecase.Service, postgres, redis 
 	mux.HandleFunc("POST /api/v1/auth/verify-email", s.verifyEmail)
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 	mux.HandleFunc("GET /api/v1/auth/me", s.me)
+	mux.HandleFunc("GET /api/v1/progress", s.listProgress)
+	mux.HandleFunc("PUT /api/v1/progress/{slug}", s.updateProgress)
 	return requestID(recoverer(logger, logging(logger, mux)))
 }
 
@@ -162,11 +167,73 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": user})
 }
 
+func (s *Server) listProgress(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.authenticatedUser(w, r)
+	if !ok || !s.progressAvailable(w) {
+		return
+	}
+	items, err := s.progress.List(r.Context(), user.ID)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": items})
+}
+
+func (s *Server) updateProgress(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.authenticatedUser(w, r)
+	if !ok || !s.progressAvailable(w) {
+		return
+	}
+	var input progressusecase.UpdateInput
+	if !s.readJSON(w, r, &input) {
+		return
+	}
+	item, err := s.progress.Update(r.Context(), user.ID, r.PathValue("slug"), input)
+	if errors.Is(err, progressdomain.ErrInvalidInput) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if errors.Is(err, progressdomain.ErrDocumentNotFound) {
+		writeError(w, http.StatusNotFound, "document not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": item})
+}
+
+func (s *Server) authenticatedUser(w http.ResponseWriter, r *http.Request) (authdomain.User, bool) {
+	if !s.authAvailable(w) {
+		return authdomain.User{}, false
+	}
+	user, err := s.auth.Me(r.Context(), bearerToken(r.Header.Get("Authorization")))
+	if errors.Is(err, authdomain.ErrInvalidCredentials) || errors.Is(err, authdomain.ErrNotFound) {
+		writeError(w, http.StatusUnauthorized, "invalid token")
+		return authdomain.User{}, false
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return authdomain.User{}, false
+	}
+	return user, true
+}
+
 func (s *Server) authAvailable(w http.ResponseWriter) bool {
 	if s.auth != nil {
 		return true
 	}
 	writeError(w, http.StatusServiceUnavailable, "auth requires postgres")
+	return false
+}
+
+func (s *Server) progressAvailable(w http.ResponseWriter) bool {
+	if s.progress != nil {
+		return true
+	}
+	writeError(w, http.StatusServiceUnavailable, "learning progress requires postgres")
 	return false
 }
 

@@ -14,11 +14,13 @@ import (
 	"codelife-study-be/internal/adapter/email"
 	authrepo "codelife-study-be/internal/adapter/repository/auth"
 	documentrepo "codelife-study-be/internal/adapter/repository/document"
+	progressrepo "codelife-study-be/internal/adapter/repository/progress"
 	"codelife-study-be/internal/config"
 	"codelife-study-be/internal/delivery/httpapi"
 	domaindocument "codelife-study-be/internal/domain/document"
 	authusecase "codelife-study-be/internal/usecase/auth"
 	documentusecase "codelife-study-be/internal/usecase/document"
+	progressusecase "codelife-study-be/internal/usecase/progress"
 )
 
 func main() {
@@ -58,12 +60,14 @@ func main() {
 	}
 	documents := documentusecase.New(repository, documentCache)
 	var authService *authusecase.Service
+	var progressService *progressusecase.Service
 	if postgres != nil {
 		authRepository := authrepo.NewPostgresRepository(postgres)
 		mailer := email.NewSMTPMailer(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPFrom, logger)
 		authService = authusecase.New(authRepository, mailer, cfg.AuthTokenSecret, cfg.AuthOTPTTL, cfg.AuthTokenTTL)
+		progressService = progressusecase.New(progressrepo.NewPostgresRepository(postgres))
 	}
-	handler := httpapi.New(documents, authService, postgresPinger, redisPinger, logger, cfg.MaxBodyBytes)
+	handler := httpapi.New(documents, authService, progressService, postgresPinger, redisPinger, logger, cfg.MaxBodyBytes)
 	server := &http.Server{Addr: cfg.Address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 
 	go func() {
