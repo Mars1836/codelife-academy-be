@@ -1,4 +1,4 @@
-﻿## **KIẾN THỨC CONTAINERIZATION & ORCHESTRATION TOÀN DIỆN**
+## **KIẾN THỨC CONTAINERIZATION & ORCHESTRATION TOÀN DIỆN**
 
 _Cẩm nang Chuyên sâu cấp độ Senior & Architect Engineer (Bản Đầy Đủ Nhất)_
 

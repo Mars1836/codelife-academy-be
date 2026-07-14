@@ -73,6 +73,7 @@ func (r *EmbeddedRepository) listFromEmbedded() ([]domain.Document, error) {
 		if err != nil {
 			return nil, err
 		}
+		raw = stripBOM(raw)
 		documents = append(documents, domain.Document{
 			Slug:        strings.TrimSuffix(entry.Name(), ".md"),
 			Title:       extractTitle(raw, entry.Name()),
@@ -117,6 +118,7 @@ func (r *EmbeddedRepository) FindBySlug(_ context.Context, slug string) (domain.
 	if err != nil {
 		return domain.Document{}, err
 	}
+	raw = stripBOM(raw)
 	return domain.Document{
 		Slug:        slug,
 		Title:       extractTitle(raw, slug),
@@ -166,4 +168,11 @@ func readingTime(raw []byte) int {
 		return 1
 	}
 	return minutes
+}
+
+func stripBOM(b []byte) []byte {
+	if len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
+		return b[3:]
+	}
+	return b
 }
