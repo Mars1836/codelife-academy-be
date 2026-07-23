@@ -4,5 +4,5 @@ import "embed"
 
 // Documents contains the temporary Markdown knowledge base.
 //
-//go:embed documents/*.md
+//go:embed all:documents
 var Documents embed.FS
