@@ -29,34 +29,13 @@ Với mỗi chủ đề, nên học theo thứ tự:
 
 ## Thứ tự học đề xuất
 
-Nếu thời gian ngắn:
-
 ```text
 Python → Database → Docker/Linux → Git/CI-CD
 → Kubernetes/Messaging → System Design → Behavioral
 ```
 
-Nếu phỏng vấn công ty fintech, ưu tiên đặc biệt:
+Nếu phỏng vấn công ty fintech, ưu tiên transaction, isolation, locking, deadlock, idempotency, audit, outbox, migration an toàn, security và consistency.
 
-- Transaction và ACID.
-- Isolation level.
-- Lost update, locking và deadlock.
-- Idempotency.
-- Audit log.
-- Outbox và duplicate message.
-- Migration database an toàn.
-- Security và consistency.
+## Cấu trúc chung
 
-## Cấu trúc chung của tài liệu
-
-Mỗi file cố gắng bao gồm:
-
-- Định nghĩa.
-- Vấn đề cần giải quyết.
-- Cơ chế hoạt động.
-- Ví dụ cơ bản.
-- Ứng dụng Backend thực tế.
-- Lỗi thường gặp.
-- Best practices và trade-off.
-- Câu hỏi phỏng vấn kèm định hướng trả lời.
-- Bài tập và checklist.
+Mỗi file gồm định nghĩa, cơ chế, ví dụ, ứng dụng thực tế, lỗi thường gặp, best practice, trade-off, câu hỏi phỏng vấn, bài tập và checklist.
