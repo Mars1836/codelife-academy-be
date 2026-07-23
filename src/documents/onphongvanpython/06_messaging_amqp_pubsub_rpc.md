@@ -1,275 +1,508 @@
-# 6. Messaging: AMQP, Pub/Sub và RPC
+# 6. Messaging: Queue, Pub/Sub, AMQP và RPC
 
-## 1. Synchronous và asynchronous
+Messaging giúp các thành phần giao tiếp bất đồng bộ, giảm coupling và xử lý tác vụ nền. Tuy nhiên nó làm hệ thống phức tạp hơn vì phải xử lý retry, duplicate message, ordering và quan sát luồng xử lý.
 
-### Synchronous
+## 1. Giao tiếp đồng bộ và bất đồng bộ
 
-Service A gọi Service B và chờ phản hồi.
-
-```text
-A → B → response → A
-```
-
-Ưu điểm: đơn giản, nhận kết quả ngay.
-
-Nhược điểm: coupling cao, B chậm thì A chậm, dễ tạo lỗi dây chuyền.
-
-### Asynchronous
-
-Service A gửi message rồi tiếp tục xử lý.
+### Đồng bộ
 
 ```text
-A → Broker → Consumer
+Client → API A → API B → API C → Response
 ```
 
-Ưu điểm: giảm coupling, hấp thụ tải đột biến, retry linh hoạt.
+API A phải chờ B và C. Ưu điểm là luồng đơn giản, caller nhận kết quả ngay. Nhược điểm là latency cộng dồn và failure lan truyền.
 
-Nhược điểm: eventual consistency, khó debug hơn, cần xử lý duplicate.
+Ứng dụng: kiểm tra số dư trước khi trả kết quả chuyển tiền, lấy thông tin cần thiết để hoàn thành request hiện tại.
 
-## 2. Message queue
-
-Các thành phần:
-
-- Producer gửi message.
-- Broker lưu và định tuyến.
-- Queue giữ message.
-- Consumer xử lý message.
-
-Ví dụ:
+### Bất đồng bộ
 
 ```text
-API tạo đơn hàng
-→ lưu order
-→ publish order_created
-→ worker gửi email
-→ worker cập nhật CRM
-→ worker cập nhật báo cáo
+API → Broker → Worker
 ```
 
-## 3. RabbitMQ
+API publish message rồi có thể trả response. Worker xử lý sau.
 
-RabbitMQ là message broker thường dùng AMQP.
+Ứng dụng:
 
-Luồng:
+- Gửi email.
+- Resize ảnh.
+- Đồng bộ CRM.
+- Sinh báo cáo.
+- Gửi webhook.
+- Xử lý sự kiện sau thanh toán.
+
+Không nên bất đồng bộ hóa tác vụ mà user bắt buộc phải biết kết quả ngay.
+
+---
+
+## 2. Message broker là gì?
+
+Broker nhận, lưu tạm và phân phối message giữa producer và consumer.
 
 ```text
-Producer → Exchange → Queue → Consumer
+Producer → Exchange/Topic/Queue → Consumer
 ```
 
-## 4. Exchange
+Broker giúp producer không cần biết consumer đang ở đâu. Consumer có thể tạm dừng rồi xử lý message sau nếu broker còn lưu message.
+
+Các sản phẩm phổ biến:
+
+- RabbitMQ: queue và routing linh hoạt, hỗ trợ AMQP.
+- Kafka: distributed log, throughput cao, lưu event lâu dài.
+- Redis Streams: stream messaging gọn nhẹ trong hệ sinh thái Redis.
+- Cloud queue: SQS, Pub/Sub, Service Bus.
+
+---
+
+## 3. Queue và competing consumers
+
+Với queue, một message thường được một consumer trong nhóm xử lý.
+
+```text
+             ┌→ Worker 1
+Producer → Queue → Worker 2
+             └→ Worker 3
+```
+
+Khi tăng worker, throughput có thể tăng nếu broker, database và dependency chịu được tải.
+
+Ví dụ message:
+
+```json
+{
+  "event_id": "evt_1001",
+  "type": "send_welcome_email",
+  "user_id": 10,
+  "email": "hau@example.com"
+}
+```
+
+Consumer chỉ ack sau khi xử lý thành công.
+
+---
+
+## 4. Pub/Sub
+
+Trong Pub/Sub, một event được nhiều subscriber độc lập nhận.
+
+```text
+Order Paid
+   ├→ Email subscriber
+   ├→ Loyalty subscriber
+   ├→ Analytics subscriber
+   └→ CRM subscriber
+```
+
+Mỗi subscriber có mục đích riêng. Nếu analytics lỗi, email vẫn có thể xử lý bình thường.
+
+Queue tập trung phân phối công việc giữa các worker cùng chức năng. Pub/Sub phát cùng một sự kiện đến nhiều nhóm xử lý khác nhau.
+
+---
+
+## 5. RabbitMQ và AMQP
+
+RabbitMQ thường dùng các khái niệm:
+
+- Producer.
+- Exchange.
+- Binding.
+- Queue.
+- Consumer.
+- Routing key.
+
+Producer thường publish vào exchange, không publish trực tiếp vào queue.
 
 ### Direct exchange
 
-Routing key khớp chính xác.
+Routing key phải khớp chính xác.
+
+```text
+routing key: email.send → email_queue
+```
 
 ### Topic exchange
 
-Routing theo pattern:
-
-```text
-order.created
-order.paid
-order.cancelled
-```
-
-Pattern:
+Hỗ trợ pattern:
 
 ```text
 order.*
+order.paid
+order.#
 ```
 
 ### Fanout exchange
 
-Gửi message đến mọi queue được bind.
+Phát message đến tất cả queue được bind, bỏ qua routing key.
 
 ### Headers exchange
 
-Routing theo header.
+Routing dựa trên header. Ít phổ biến hơn direct và topic.
 
-## 5. Queue và routing key
+---
 
-Producer không nhất thiết gửi trực tiếp vào queue; thường publish vào exchange với routing key.
+## 6. Acknowledgement và durability
 
-```python
-channel.basic_publish(
-    exchange="order-events",
-    routing_key="order.created",
-    body=message,
-)
-```
+Consumer ack để broker biết message đã xử lý xong.
 
-## 6. AMQP
+- Auto ack: broker coi message thành công ngay khi gửi; có nguy cơ mất message khi worker crash.
+- Manual ack: consumer ack sau khi xử lý thành công.
+- Nack/reject: báo xử lý thất bại; có thể requeue hoặc chuyển DLQ.
 
-AMQP là giao thức messaging quy định cách client và broker giao tiếp.
+Để tăng độ bền cần xem đồng thời:
 
-RabbitMQ hỗ trợ AMQP 0-9-1 phổ biến.
+- Queue durable.
+- Message persistent.
+- Publisher confirm.
+- Broker replication phù hợp.
 
-## 7. Acknowledgement
+Không có một flag duy nhất biến hệ thống thành “không bao giờ mất message”.
 
-Consumer chỉ ACK sau khi xử lý thành công.
+---
 
-```text
-Nhận message
-→ xử lý
-→ commit DB
-→ ACK
-```
+## 7. Retry và Dead Letter Queue
 
-Nếu consumer chết trước ACK, broker có thể giao lại message.
-
-Điều này dẫn đến khả năng xử lý ít nhất một lần, vì vậy consumer phải idempotent.
-
-## 8. Retry
-
-Không retry vô hạn ngay lập tức.
+Không retry vô hạn ngay lập tức vì có thể tạo retry storm.
 
 Chiến lược:
 
-- Giới hạn số lần.
-- Exponential backoff.
-- Jitter.
-- Phân biệt lỗi tạm thời và lỗi vĩnh viễn.
-- Sau ngưỡng retry, đưa vào DLQ.
+```text
+Main Queue
+   ↓ lỗi
+Retry 10s
+   ↓ lỗi
+Retry 1m
+   ↓ lỗi
+Retry 10m
+   ↓ lỗi
+Dead Letter Queue
+```
 
-## 9. Dead-letter queue
+DLQ lưu message không xử lý được để điều tra hoặc replay.
 
-DLQ lưu message không xử lý được sau nhiều lần retry.
+Message nên có metadata:
 
-Dùng để:
+```json
+{
+  "event_id": "evt_1001",
+  "attempt": 3,
+  "occurred_at": "2026-07-23T08:00:00Z",
+  "correlation_id": "req_abc"
+}
+```
 
-- Điều tra lỗi.
-- Sửa dữ liệu.
-- Replay có kiểm soát.
-- Tránh message độc chặn queue chính.
+Phân biệt lỗi:
 
-## 10. Message duplication
+- Transient: timeout, service tạm lỗi → retry.
+- Permanent: email sai format, resource không tồn tại → không retry vô hạn.
+- Bug: payload không tương thích → DLQ và cảnh báo.
 
-Duplicate có thể xảy ra khi:
+---
 
-1. Consumer cập nhật DB thành công.
-2. Consumer chết trước khi ACK.
-3. Broker giao lại message.
+## 8. At-most-once, at-least-once và exactly-once
 
-Giải pháp:
+### At-most-once
 
-- Message ID duy nhất.
-- Bảng processed_messages.
-- Unique constraint.
-- Idempotency key.
-- Upsert.
-- Business operation có điều kiện.
+Message có thể mất nhưng không xử lý lặp. Phù hợp telemetry không quan trọng.
 
-Ví dụ:
+### At-least-once
+
+Message không dễ mất nhưng có thể xử lý nhiều lần. Đây là mô hình phổ biến, yêu cầu consumer idempotent.
+
+### Exactly-once
+
+“Đúng một lần” end-to-end rất khó. Một số nền tảng cung cấp guarantee trong phạm vi cụ thể, nhưng side effect ngoài hệ thống vẫn cần idempotency.
+
+Ví dụ gửi request thanh toán thành công nhưng worker crash trước ack. Broker gửi lại message; consumer phải nhận ra giao dịch đã xử lý.
+
+---
+
+## 9. Idempotent consumer
+
+Tạo bảng lưu event đã xử lý:
 
 ```sql
-INSERT INTO processed_messages(message_id)
-VALUES ('msg-001')
-ON CONFLICT DO NOTHING;
+CREATE TABLE processed_events (
+    consumer_name VARCHAR(100) NOT NULL,
+    event_id VARCHAR(100) NOT NULL,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (consumer_name, event_id)
+);
 ```
 
-Nếu không insert được vì đã tồn tại, bỏ qua xử lý.
+Trong cùng transaction:
 
-## 11. Idempotent consumer
+1. Insert `(consumer_name, event_id)`.
+2. Nếu conflict, bỏ qua vì đã xử lý.
+3. Cập nhật nghiệp vụ.
+4. Commit.
+5. Ack message.
 
-Một message xử lý nhiều lần vẫn cho kết quả giống một lần.
+Nếu side effect là gọi API bên ngoài, cần idempotency key ở API đích hoặc cơ chế reconcile.
 
-Ví dụ không idempotent:
+---
+
+## 10. Outbox pattern
+
+Vấn đề dual write:
 
 ```text
-balance = balance + 100
+1. Commit order vào PostgreSQL thành công
+2. Publish order.paid thất bại
 ```
 
-Ví dụ tốt hơn:
+Dữ liệu đã thay đổi nhưng event bị mất.
+
+Outbox pattern ghi dữ liệu nghiệp vụ và event vào cùng transaction:
+
+```sql
+BEGIN;
+
+UPDATE orders SET status = 'paid' WHERE id = 1001;
+
+INSERT INTO outbox_events(id, event_type, payload)
+VALUES ('evt_1001', 'order.paid', '{"order_id":1001}');
+
+COMMIT;
+```
+
+Một publisher riêng đọc outbox và publish broker. Sau khi publish thành công, đánh dấu event đã gửi.
+
+Outbox không tự loại bỏ duplicate; consumer vẫn cần idempotency.
+
+---
+
+## 11. Ordering
+
+Ordering toàn cục làm giảm khả năng scale. Thường chỉ cần ordering theo entity, ví dụ theo `account_id` hoặc `order_id`.
+
+Kafka partition theo key:
 
 ```text
-Ghi nhận payment_id duy nhất.
-Nếu payment_id đã xử lý thì không cộng lại.
+key = order_id
 ```
 
-## 12. Eventual consistency
+Các event cùng order vào cùng partition và giữ thứ tự trong partition.
 
-Khi tạo order:
+RabbitMQ với nhiều consumer có thể hoàn thành message không đúng thứ tự dù broker giao lần lượt. Nếu nghiệp vụ phụ thuộc version, consumer nên kiểm tra sequence/version.
 
-- Order DB commit ngay.
-- CRM có thể cập nhật sau vài giây.
-- Báo cáo có thể cập nhật sau vài phút.
+---
 
-Hệ thống cuối cùng nhất quán, nhưng không đồng bộ tức thời.
+## 12. RabbitMQ và Kafka
 
-## 13. Pub/Sub và queue
+### RabbitMQ
 
-### Queue
+Phù hợp:
 
-Một message thường được một consumer trong consumer group xử lý.
+- Task queue.
+- Routing linh hoạt.
+- Request/reply.
+- Message thường được xóa sau ack.
+- Latency thấp cho workflow nghiệp vụ.
 
-### Pub/Sub
+### Kafka
 
-Một event có thể được nhiều subscriber độc lập nhận.
+Phù hợp:
 
-Ví dụ `order_created`:
+- Event streaming.
+- Throughput lớn.
+- Retention dài.
+- Replay event.
+- Nhiều consumer group đọc độc lập.
 
-- Email subscriber.
-- CRM subscriber.
-- Analytics subscriber.
+Không nên thay RabbitMQ bằng Kafka chỉ vì Kafka “scale lớn hơn”. Cần xem use case là task distribution hay event log.
 
-## 14. RPC
+---
+
+## 13. Backpressure và prefetch
+
+Nếu producer nhanh hơn consumer, queue tăng liên tục, latency và storage tăng.
+
+Cách xử lý:
+
+- Scale consumer có giới hạn.
+- Rate limit producer.
+- Batch processing.
+- Prefetch hợp lý.
+- Giới hạn queue và alert queue depth.
+- Tối ưu dependency chậm.
+
+RabbitMQ prefetch giới hạn số message chưa ack trên consumer. Prefetch quá lớn làm một worker giữ quá nhiều message và phân phối không đều.
+
+---
+
+## 14. Poison message
+
+Poison message luôn làm consumer lỗi, ví dụ schema sai hoặc dữ liệu không hợp lệ.
+
+Nếu requeue vô hạn, nó chiếm tài nguyên và làm log nhiễu. Cần giới hạn retry rồi đưa DLQ kèm lý do lỗi.
+
+Consumer cần validate schema trước xử lý.
+
+---
+
+## 15. Schema evolution
+
+Message là contract giữa producer và consumer.
+
+Nguyên tắc:
+
+- Thêm field optional thay vì đổi nghĩa field cũ.
+- Không xóa field ngay khi consumer cũ còn chạy.
+- Có `event_version`.
+- Consumer bỏ qua field không biết.
+- Dùng schema registry khi hệ thống lớn.
+
+```json
+{
+  "event_type": "order.paid",
+  "event_version": 2,
+  "data": {
+    "order_id": 1001,
+    "currency": "VND"
+  }
+}
+```
+
+---
+
+## 16. RPC
 
 RPC cho phép gọi procedure trên service khác như gọi hàm từ xa.
 
 Ví dụ gRPC:
 
-```text
-GetUser(user_id) → UserResponse
+```proto
+service AccountService {
+  rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
+}
 ```
 
-RPC thường có contract rõ và hiệu năng tốt.
+Ưu điểm:
 
-REST dùng HTTP resource-oriented:
+- Contract mạnh.
+- Serialization hiệu quả.
+- Code generation.
+- Hỗ trợ streaming.
 
-```text
-GET /users/10
+Nhược điểm:
+
+- Coupling contract cao hơn event.
+- Caller vẫn phụ thuộc availability của server.
+- Debug thủ công khó hơn REST JSON.
+
+RPC không phải messaging bất đồng bộ. RPC thường vẫn là request-response đồng bộ dù transport khác HTTP REST.
+
+---
+
+## 17. Timeout, retry và circuit breaker
+
+Với RPC hoặc HTTP giữa service:
+
+- Luôn có timeout.
+- Retry chỉ với lỗi phù hợp.
+- Dùng exponential backoff và jitter.
+- Không retry thao tác không idempotent nếu không có idempotency key.
+- Circuit breaker giúp ngừng gọi dependency đang lỗi liên tục.
+
+Retry ở nhiều tầng có thể nhân số request. Ví dụ client retry 3 lần, API retry 3 lần và SDK retry 3 lần có thể tạo tới 27 lần gọi.
+
+---
+
+## 18. Quan sát hệ thống messaging
+
+Metric quan trọng:
+
+- Queue depth.
+- Message age.
+- Publish rate.
+- Consume rate.
+- Retry rate.
+- DLQ size.
+- Processing latency.
+- Consumer error rate.
+
+Log nên có:
+
+- event_id.
+- correlation_id.
+- event_type.
+- attempt.
+- consumer_name.
+
+Distributed tracing cần propagate trace context qua message header.
+
+---
+
+## 19. Ví dụ FastAPI publish task
+
+Pseudo-code:
+
+```python
+@app.post("/users")
+async def create_user(payload: CreateUserRequest):
+    user = await user_service.create(payload)
+
+    await broker.publish(
+        routing_key="email.welcome",
+        message={
+            "event_id": str(uuid4()),
+            "user_id": user.id,
+            "email": user.email,
+        },
+    )
+
+    return user
 ```
 
-## 15. Outbox pattern
+Trong production, nếu cần bảo đảm event không mất sau commit database, nên dùng outbox thay vì publish trực tiếp như ví dụ đơn giản trên.
 
-Vấn đề:
+---
 
-1. Lưu order vào DB thành công.
-2. Publish message thất bại.
+## 20. Câu hỏi phỏng vấn
 
-Kết quả: order tồn tại nhưng không có event.
+### Queue khác Pub/Sub thế nào?
 
-Outbox pattern:
+Queue thường phân phối một công việc cho một consumer trong nhóm. Pub/Sub phát cùng event cho nhiều nhóm subscriber độc lập.
 
-- Trong cùng transaction, lưu order và lưu outbox event.
-- Worker đọc outbox và publish.
-- Đánh dấu đã publish.
+### Khi nào dùng RabbitMQ, khi nào dùng Kafka?
 
-```text
-BEGIN
-INSERT order
-INSERT outbox_event
-COMMIT
-```
+RabbitMQ phù hợp task queue và routing nghiệp vụ linh hoạt. Kafka phù hợp event stream, throughput lớn, retention và replay. Quyết định dựa trên semantics chứ không chỉ throughput.
 
-## Câu hỏi phỏng vấn
+### Consumer xử lý xong nhưng chưa ack rồi crash thì sao?
 
-### Tại sao không gọi tất cả service trực tiếp?
+Broker có thể giao lại message. Vì vậy consumer cần idempotent để duplicate không tạo side effect lặp.
 
-Vì synchronous call tạo coupling và lỗi dây chuyền. Queue giúp tách rời, retry, hấp thụ tải và xử lý nền.
+### Outbox giải quyết vấn đề gì?
 
-### Consumer xử lý xong nhưng chưa ACK rồi chết?
+Outbox giải quyết dual write giữa database và broker bằng cách lưu business change và event trong cùng transaction, sau đó publisher gửi event ra broker.
 
-Message có thể được giao lại. Consumer cần idempotent.
+### DLQ dùng để làm gì?
 
-### Làm sao tránh xử lý hai lần?
-
-Message ID, unique constraint, processed message table, idempotency key và transaction phù hợp.
-
-### Pub/Sub và queue khác nhau?
-
-Queue thường phân phối công việc giữa consumer; Pub/Sub phát cùng event cho nhiều subscriber độc lập.
+DLQ chứa message đã vượt giới hạn retry hoặc không thể xử lý, giúp tránh vòng lặp vô hạn và hỗ trợ điều tra/replay.
 
 ### RPC khác REST?
 
-RPC tập trung hành động/procedure, contract mạnh và thường hiệu năng cao. REST tập trung resource và tận dụng semantics HTTP.
+RPC tập trung procedure và contract, thường dùng code generation. REST tập trung resource và semantics HTTP. Cả hai thường là giao tiếp đồng bộ.
+
+---
+
+## 21. Bài tập thực hành
+
+1. Thiết kế queue gửi email với retry 10 giây, 1 phút và DLQ.
+2. Viết idempotent consumer dùng bảng `processed_events`.
+3. Thiết kế outbox cho sự kiện `payment.completed`.
+4. So sánh RabbitMQ và Kafka cho hệ thống đồng bộ CRM.
+5. Mô phỏng worker crash sau khi ghi database nhưng trước ack.
+6. Thiết kế metric và alert cho queue backlog.
+7. Version hóa schema event mà không phá consumer cũ.
+
+## Checklist
+
+- [ ] Phân biệt sync và async.
+- [ ] Phân biệt queue và Pub/Sub.
+- [ ] Hiểu exchange, routing key, ack và prefetch.
+- [ ] Giải thích được at-least-once và idempotency.
+- [ ] Hiểu retry, backoff và DLQ.
+- [ ] Giải thích được outbox pattern.
+- [ ] So sánh RabbitMQ và Kafka theo use case.
+- [ ] Hiểu ordering, schema evolution và observability.
